@@ -1,7 +1,7 @@
 import { AfterViewInit, Component, ElementRef, HostListener, ViewChild } from '@angular/core';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { CSS3DRenderer } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
+import { CSS3DObject, CSS3DRenderer } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 import * as TWEEN from '@tweenjs/tween.js';
 import { CommonModule } from '@angular/common';
 
@@ -20,22 +20,28 @@ export class CanvasBoxComponent implements AfterViewInit {
   renderer!: THREE.WebGLRenderer;
   cssRenderer!: CSS3DRenderer;
   car!: THREE.Group;
+  cssObject!: CSS3DObject;
+  private tween: TWEEN.Tween<{ t: number }> | null = null;
+  private curve!: THREE.CatmullRomCurve3;
+  scale: number = 2;
 
   constructor() { }
 
   ngAfterViewInit(): void {
     this.initThreeJS();
     this.loadCarModel();
+    this.createHtmlPlane(); // Add this line
     this.animate();
+    // No call to startCameraAnimation() here
   }
 
   initThreeJS(): void {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000); // Set a black background for contrast
-    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
     this.camera.position.x = 0;
-    this.camera.position.z = 20;
-    this.camera.position.y = 5;
+    this.camera.position.z = 200;
+    this.camera.position.y = 50;
 
     // WebGL Renderer
     this.renderer = new THREE.WebGLRenderer();
@@ -60,14 +66,13 @@ export class CanvasBoxComponent implements AfterViewInit {
     // Axes Helper
     const axesHelper = new THREE.AxesHelper(100); // Length of the axes lines
     this.scene.add(axesHelper);
-
-
   }
 
   loadCarModel(): void {
     const loader = new GLTFLoader();
     loader.load('/assets/blender/car.gltf', (gltf) => {
       this.car = gltf.scene;
+      this.car.scale.set(20, 20, 20);
       this.car.rotation.y = Math.PI * 1.25;
 
       this.scene.add(this.car);
@@ -76,14 +81,35 @@ export class CanvasBoxComponent implements AfterViewInit {
     });
   }
 
+  createHtmlPlane(): void {
+    const element = document.createElement('div');
+    element.innerHTML = `
+      <iframe
+        src="https://open.spotify.com/embed/track/3n3Ppam7vgaVa1iaRUc9Lp"
+        width="300"
+        height="380"
+        frameborder="0"
+        allowtransparency="true"
+        allow="encrypted-media">
+      </iframe>
+    `;
+    element.style.zIndex = '10'; // Set z-index to ensure it has a proper depth
+
+    this.cssObject = new CSS3DObject(element);
+    this.cssObject.rotation.y = Math.PI * 0.25;
+    this.cssObject.position.set(0, 0, 0); // Position the plane in the 3D space
+
+    this.scene.add(this.cssObject);
+  }
+
   createSplineCurve(): THREE.CatmullRomCurve3 {
     const points = [
-      new THREE.Vector3(0, 5, 20),  // Starting point
-      new THREE.Vector3(-1.5, 4, 15),  // Intermediate point 3
-      new THREE.Vector3(-2.5, 3, 12),  // Intermediate point 3
-      new THREE.Vector3(-3, 2.5, 8),  // Intermediate point 3
-      new THREE.Vector3(-2.75, 2.2, 4),  // End point
-      new THREE.Vector3(-2, 2, 2),  // End point
+      new THREE.Vector3(0 * this.scale, 50 * this.scale, 200 * this.scale),  // Starting point
+      new THREE.Vector3(-15 * this.scale, 40 * this.scale, 150 * this.scale),  // Intermediate point 1
+      new THREE.Vector3(-25 * this.scale, 30 * this.scale, 120 * this.scale),  // Intermediate point 2
+      new THREE.Vector3(-30 * this.scale, 25 * this.scale, 80 * this.scale),  // Intermediate point 3
+      new THREE.Vector3(-27.5 * this.scale, 22 * this.scale, 40 * this.scale),  // Intermediate point 4
+      new THREE.Vector3(-20 * this.scale, 20 * this.scale, 20 * this.scale),  // End point
     ];
 
     return new THREE.CatmullRomCurve3(points);
@@ -94,36 +120,64 @@ export class CanvasBoxComponent implements AfterViewInit {
     const positionStart = { t: 0 };
     const positionEnd = { t: 1 };
 
-    const tween = new TWEEN.Tween(positionStart)
+    const lookAtPoints = [
+      new THREE.Vector3(0 * this.scale, 50 * this.scale, 0 * this.scale), // Look at this point while at the start
+      new THREE.Vector3(-15.0 * this.scale, 35 * this.scale, -10 * this.scale),  // Look at this point while at the first intermediate point
+      new THREE.Vector3(-30 * this.scale, 20 * this.scale, -20 * this.scale)  // Look at this point while at the end
+    ];
+
+    if (this.tween) {
+      this.tween.stop();
+    }
+
+    this.tween = new TWEEN.Tween(positionStart)
       .to(positionEnd, duration)
       .easing(TWEEN.Easing.Quadratic.InOut)
       .onUpdate(() => {
         const point = curve.getPointAt(positionStart.t);
-        const lookAtPoint = curve.getPointAt(Math.min(positionStart.t + 0.01, 1)); // Look ahead slightly on the curve
         this.camera.position.set(point.x, point.y, point.z);
+
+        // Interpolate lookAt point
+        const segmentIndex = Math.floor(positionStart.t * (lookAtPoints.length - 1));
+        const segmentT = (positionStart.t * (lookAtPoints.length - 1)) - segmentIndex;
+
+        const lookAtPoint = new THREE.Vector3(
+          THREE.MathUtils.lerp(lookAtPoints[segmentIndex].x, lookAtPoints[segmentIndex + 1].x, segmentT),
+          THREE.MathUtils.lerp(lookAtPoints[segmentIndex].y, lookAtPoints[segmentIndex + 1].y, segmentT),
+          THREE.MathUtils.lerp(lookAtPoints[segmentIndex].z, lookAtPoints[segmentIndex + 1].z, segmentT)
+        );
+
+        this.camera.lookAt(lookAtPoint);
+      })
+      .onComplete(() => {
+        this.tween = null;
       })
       .start();
   }
 
   startCameraAnimation(): void {
-    const curve = this.createSplineCurve();
-    const duration = 7000; // Duration in milliseconds (5 seconds)
-    this.animateCameraAlongCurve(curve, duration);
-  }
-
-  @HostListener('window:resize', ['$event'])
-  onWindowResize(): void {
-    this.camera.aspect = window.innerWidth / window.innerHeight;
-    this.camera.updateProjectionMatrix();
-
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.cssRenderer.setSize(window.innerWidth, window.innerHeight);
+    this.curve = this.createSplineCurve();
+    const duration = 7000; // Duration in milliseconds (7 seconds)
+    this.animateCameraAlongCurve(this.curve, duration);
   }
 
   animate(): void {
+    
     requestAnimationFrame(() => this.animate());
-    this.renderer.render(this.scene, this.camera);
-    this.cssRenderer.render(this.scene, this.camera);
-    TWEEN.update(); // Update tweens
+    if (this.renderer && this.scene && this.camera) {
+      this.renderer.render(this.scene, this.camera);
+      this.cssRenderer.render(this.scene, this.camera);
+      TWEEN.update();
+
+      // Check visibility of the CSS object
+    }
+  }
+
+  @HostListener('window:resize', ['$event'])
+  onResize(event: Event): void {
+    this.camera.aspect = window.innerWidth / window.innerHeight;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.cssRenderer.setSize(window.innerWidth, window.innerHeight);
   }
 }
