@@ -23,6 +23,8 @@ export class CanvasBoxComponent implements AfterViewInit {
   cssObject!: CSS3DObject;
   private tween: TWEEN.Tween<{ t: number }> | null = null;
   private curve!: THREE.CatmullRomCurve3;
+  private isReversed: boolean = false;
+  private points: THREE.Vector3[] = [];
   scale: number = 2;
 
   constructor() { }
@@ -30,9 +32,8 @@ export class CanvasBoxComponent implements AfterViewInit {
   ngAfterViewInit(): void {
     this.initThreeJS();
     this.loadCarModel();
-    this.createHtmlPlane(); // Add this line
+    this.createAndStoreCurve(); // Initialize the curve and store its points
     this.animate();
-    // No call to startCameraAnimation() here
   }
 
   initThreeJS(): void {
@@ -75,6 +76,7 @@ export class CanvasBoxComponent implements AfterViewInit {
       this.car.scale.set(20, 20, 20);
       this.car.rotation.y = Math.PI * 1.25;
 
+      this.createHtmlPlane();
       this.scene.add(this.car);
     }, undefined, (error) => {
       console.error('An error happened while loading the GLTF model', error);
@@ -93,16 +95,18 @@ export class CanvasBoxComponent implements AfterViewInit {
         allow="encrypted-media">
       </iframe>
     `;
-    element.style.zIndex = '10'; // Set z-index to ensure it has a proper depth
+    element.style.position = 'relative'; // Use relative position
 
     this.cssObject = new CSS3DObject(element);
-    this.cssObject.rotation.y = Math.PI * 0.25;
-    this.cssObject.position.set(0, 0, 0); // Position the plane in the 3D space
+    this.cssObject.position.set(0, 5, -5); // Adjust the position to be inside the car where the radio should be
+    this.cssObject.scale.set(0.1, 0.1, 0.1); // Adjust the scale if necessary
 
-    this.scene.add(this.cssObject);
+    if (this.car) {
+      this.car.add(this.cssObject);
+    }
   }
 
-  createSplineCurve(): THREE.CatmullRomCurve3 {
+  createAndStoreCurve(): void {
     const points = [
       new THREE.Vector3(0 * this.scale, 50 * this.scale, 200 * this.scale),  // Starting point
       new THREE.Vector3(-15 * this.scale, 40 * this.scale, 150 * this.scale),  // Intermediate point 1
@@ -112,64 +116,89 @@ export class CanvasBoxComponent implements AfterViewInit {
       new THREE.Vector3(-20 * this.scale, 20 * this.scale, 20 * this.scale),  // End point
     ];
 
-    return new THREE.CatmullRomCurve3(points);
+    this.points = points;
+    this.curve = new THREE.CatmullRomCurve3(this.points);
   }
 
-  animateCameraAlongCurve(curve: THREE.CatmullRomCurve3, duration: number): void {
+  animateCameraAlongCurve(curve: THREE.CatmullRomCurve3, duration: number, reverse: boolean = false): void {
     const points = curve.getPoints(1000); // Increase for smoother curve
+    //console.log('Curve points:', points);
+  
+    if (!points || points.length === 0) {
+      console.error('Curve points are not defined or empty.');
+      return;
+    }
+  
     const positionStart = { t: 0 };
     const positionEnd = { t: 1 };
-
+  
     const lookAtPoints = [
       new THREE.Vector3(0 * this.scale, 50 * this.scale, 0 * this.scale), // Look at this point while at the start
       new THREE.Vector3(-15.0 * this.scale, 35 * this.scale, -10 * this.scale),  // Look at this point while at the first intermediate point
       new THREE.Vector3(-30 * this.scale, 20 * this.scale, -20 * this.scale)  // Look at this point while at the end
     ];
-
+  
+    if (reverse) {
+      points.reverse();
+      lookAtPoints.reverse();
+    }
+  
     if (this.tween) {
       this.tween.stop();
     }
-
+  
     this.tween = new TWEEN.Tween(positionStart)
       .to(positionEnd, duration)
       .easing(TWEEN.Easing.Quadratic.InOut)
       .onUpdate(() => {
         const point = curve.getPointAt(positionStart.t);
-        this.camera.position.set(point.x, point.y, point.z);
-
-        // Interpolate lookAt point
-        const segmentIndex = Math.floor(positionStart.t * (lookAtPoints.length - 1));
-        const segmentT = (positionStart.t * (lookAtPoints.length - 1)) - segmentIndex;
-
-        const lookAtPoint = new THREE.Vector3(
-          THREE.MathUtils.lerp(lookAtPoints[segmentIndex].x, lookAtPoints[segmentIndex + 1].x, segmentT),
-          THREE.MathUtils.lerp(lookAtPoints[segmentIndex].y, lookAtPoints[segmentIndex + 1].y, segmentT),
-          THREE.MathUtils.lerp(lookAtPoints[segmentIndex].z, lookAtPoints[segmentIndex + 1].z, segmentT)
-        );
-
-        this.camera.lookAt(lookAtPoint);
+        console.log('Tween update - t:', positionStart.t, 'point:', point);
+  
+        if (point) {
+          this.camera.position.set(point.x, point.y, point.z);
+  
+          // Interpolate lookAt point
+          const segmentIndex = Math.floor(positionStart.t * (lookAtPoints.length - 1));
+          const segmentT = (positionStart.t * (lookAtPoints.length - 1)) - segmentIndex;
+  
+          const lookAtPoint = new THREE.Vector3(
+            THREE.MathUtils.lerp(lookAtPoints[segmentIndex].x, lookAtPoints[segmentIndex + 1].x, segmentT),
+            THREE.MathUtils.lerp(lookAtPoints[segmentIndex].y, lookAtPoints[segmentIndex + 1].y, segmentT),
+            THREE.MathUtils.lerp(lookAtPoints[segmentIndex].z, lookAtPoints[segmentIndex + 1].z, segmentT)
+          );
+  
+          this.camera.lookAt(lookAtPoint);
+        } else {
+          console.error('Point is undefined at positionStart.t:', positionStart.t);
+        }
       })
       .onComplete(() => {
         this.tween = null;
       })
       .start();
   }
+  
 
-  startCameraAnimation(): void {
-    this.curve = this.createSplineCurve();
-    const duration = 7000; // Duration in milliseconds (7 seconds)
-    this.animateCameraAlongCurve(this.curve, duration);
+  toggleCameraAnimation(): void {
+    if (!this.curve) {
+      console.error('Curve is undefined.');
+      return;
+    }
+
+    this.isReversed = !this.isReversed;
+
+    const points = this.isReversed ? [...this.points].reverse() : [...this.points];
+    this.curve = new THREE.CatmullRomCurve3(points);
+
+    this.animateCameraAlongCurve(this.curve, 7000, this.isReversed);
   }
 
   animate(): void {
-    
     requestAnimationFrame(() => this.animate());
     if (this.renderer && this.scene && this.camera) {
       this.renderer.render(this.scene, this.camera);
       this.cssRenderer.render(this.scene, this.camera);
       TWEEN.update();
-
-      // Check visibility of the CSS object
     }
   }
 
